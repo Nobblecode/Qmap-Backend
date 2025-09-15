@@ -5,8 +5,8 @@ const Schema = Mongoose.Schema;
 const Balance = new Schema(
   {
     UserID: {
-      type: String,
-      required: true,
+      type: Schema.Types.ObjectId,
+      ref: "Profile",
       unique: true,
     },
     Balance: {

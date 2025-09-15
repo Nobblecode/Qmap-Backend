@@ -1,7 +1,7 @@
 //cloudinary
 const cloudinary = require("cloudinary");
 cloudinary.config({
-  cloud_name: "loswift",
+  cloud_name: "dlpbzlmix",
   api_key: process.env.apiKey,
   api_secret: process.env.apiSecret,
   secure: true,

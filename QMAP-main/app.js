@@ -81,3 +81,16 @@ app.use(
   require("./routes/productOwner/wallet/Withdraw")
 );
 app.use("/webhook", require("./routes/general/Webhook"));
+// new endpoints
+app.use("/productowner/wallet", require("./routes/productOwner/wallet/Wallet"));
+app.use("/affiliate/analytics", require("./routes/affiliate/analytics/Analytics"));
+app.use("/general/wallets", require("./routes/general/wallets/Wallets"));
+app.use("/general/tracking", require("./routes/general/tracking/Tracking"));
+
+// admin client management
+app.use('/admin/clients', require('./routes/admin/clients/Clients'));
+
+// affiliate wallet endpoints
+app.use("/affiliate/wallet/deposit", require("./routes/affiliate/wallet/Deposit"));
+app.use("/affiliate/wallet/withdraw", require("./routes/affiliate/wallet/Withdraw"));
+app.use("/affiliate/wallet", require("./routes/affiliate/wallet/Wallet"));

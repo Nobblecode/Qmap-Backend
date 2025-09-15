@@ -18,6 +18,10 @@ const ClickTracking = new Schema(
       type: Boolean,
       default: false,
     },
+    conversion: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

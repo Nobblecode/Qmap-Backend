@@ -13,7 +13,7 @@ const router = express.Router();
 // Create Product
 router.post("/add", VerifyProductOwnerJWTToken, async (req, res) => {
   try {
-    const { name, description, currency, affiliateCommission, maxClicks } =
+    const { name, description, currency, affiliateCommission, affiliateLink, maxClicks } =
       req.body;
 
     const image = req.files?.image;
@@ -27,7 +27,7 @@ router.post("/add", VerifyProductOwnerJWTToken, async (req, res) => {
     }
 
     // Validate required fields
-    if (!name || !description || !affiliateCommission || !maxClicks) {
+    if (!name || !description || !affiliateCommission || !affiliateLink || !maxClicks) {
       return res
         .status(400)
         .json({ Access: true, Error: "All fields are required" });
@@ -45,7 +45,7 @@ router.post("/add", VerifyProductOwnerJWTToken, async (req, res) => {
     if (userBalance.Balance < expectedCost) {
       return res.status(400).json({
         Access: true,
-        Error: "Insufficient balance",
+        Error: `Insufficient balance. Expected cost is ${expectedCost}`,
         requiredAmount: expectedCost,
         currentBalance: userBalance.Balance,
         deficit: expectedCost - userBalance.Balance,
@@ -73,8 +73,9 @@ router.post("/add", VerifyProductOwnerJWTToken, async (req, res) => {
       description,
       imageUrl: uploadedImage.url,
       imagePublicId: uploadedImage.publicID,
-      currency: currency,
+      currency,
       affiliateCommission: parseFloat(affiliateCommission),
+      affiliateLink,
       maxClicks: parseInt(maxClicks),
       expectedCost,
       productOwner: req.user._id,

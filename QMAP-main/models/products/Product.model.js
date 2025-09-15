@@ -28,6 +28,9 @@ const Product = new Schema(
       required: [true, "Commission is required"],
       min: 0,
     },
+    affiliateLink: {
+      type: String,
+    },
     maxClicks: {
       type: Number,
       required: [true, "Maximum number of clicks is required"],
