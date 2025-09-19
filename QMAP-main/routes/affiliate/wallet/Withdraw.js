@@ -2,7 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const { default: mongoose } = require("mongoose");
 const {
-  VerifyProductOwnerJWTToken,
+  VerifyAffilliateMarketerJWTToken,
   Errordisplay,
 } = require("../../../utils/Auth.utils");
 const BalanceModel = require("../../../models/wallet/Balance.model");
@@ -17,12 +17,9 @@ const AdminTransactionsModel = require("../../../models/wallet/admin/AdminTransa
 const FailedTransactionsModel = require("../../../models/wallet/FailedTransactions.model");
 const router = express.Router();
 
-router.post("/sendOtp", VerifyProductOwnerJWTToken, async (req, res) => {
+router.post("/sendOtp", VerifyAffilliateMarketerJWTToken, async (req, res) => {
   try {
     let Email = req.user.Email;
-
-    // if (Type === "Seller") {
-    // }
 
     // inputs
     let { Amount, Bank, AccountNumber, AccountName } = req.body;
@@ -82,13 +79,12 @@ router.post("/sendOtp", VerifyProductOwnerJWTToken, async (req, res) => {
       Bank: Bank,
       AccountNumber: AccountNumber,
       AccountName: AccountName,
-      TypeOf: "Product Owner",
+      TypeOf: "Affiliate",
     });
 
     // find owner
     let owner = await ProfileModel.findOne({ _id: req.user._id });
 
-    // send mail
     // send mail
     try {
       const html = `
@@ -107,73 +103,48 @@ router.post("/sendOtp", VerifyProductOwnerJWTToken, async (req, res) => {
   }
 });
 
-// paystack
-router.post("/", VerifyProductOwnerJWTToken, async (req, res) => {
+// paystack-like withdraw endpoint
+router.post("/", VerifyAffilliateMarketerJWTToken, async (req, res) => {
   let walletidFailed = "nan";
   let AmountFailed = 0;
   let ChargesFailed = 0;
   let AdminTransactionIdFailed = "";
   let transactionIDFailed = "";
-  //   console.log("about to start");
   try {
-    // verify otp
-    // inputs
     let Otp = req.body.OTP;
-    // check otp
     let FindOtp = await OtpModel.findOneAndDelete({
       UserID: req.user._id,
       OTP: Otp,
     });
-    if (!FindOtp)
-      return res.status(404).json({ Access: true, Error: "Incorrect Otp" });
+    if (!FindOtp) return res.status(404).json({ Access: true, Error: "Incorrect Otp" });
 
-    console.log("past otp");
-
-    // find details
-    const body = await TemporaryWithdrawalModel.findOne({
-      UserId: req.user._id,
-    });
-
-    if (!body)
-      return res
-        .status(400)
-        .json({ Access: true, Error: "Pls restart withdrawal process" });
+    const body = await TemporaryWithdrawalModel.findOne({ UserId: req.user._id });
+    if (!body) return res.status(400).json({ Access: true, Error: "Pls restart withdrawal process" });
 
     AmountFailed = body.Amount;
 
-    console.log("past details");
-
-    // Step 1: Create or verify transfer recipient
     const recipientResponse = await axios.post(
       "https://api.paystack.co/transferrecipient",
       {
         type: "nuban",
-        name: body.AccountName, // Replace with the actual user name
+        name: body.AccountName,
         account_number: body.AccountNumber,
         bank_code: body.Bank,
         currency: "NGN",
       },
       {
-        headers: {
-          Authorization: `Bearer ${process.env.PaystackSecret}`, // Use your secret key
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${process.env.PaystackSecret}`, "Content-Type": "application/json" },
       }
     );
 
-    console.log("past recipient response");
-
     const recipientCode = recipientResponse.data.data.recipient_code;
 
-    // find user balance
     const userBalance = await BalanceModel.findOne({ UserID: req.user._id });
     walletidFailed = userBalance._id;
 
-  // charges (flat amount from env, not percentage)
-  let charges = Number(process.env.WithdrawalCharges) || 0;
+    let charges = Number(process.env.WithdrawalCharges) || 0;
     ChargesFailed = charges;
 
-    // create user transaction
     let Transaction = await TransactionsModel.create({
       WalletID: userBalance._id,
       UserId: req.user._id,
@@ -182,63 +153,34 @@ router.post("/", VerifyProductOwnerJWTToken, async (req, res) => {
       Charges: charges,
       Type: "Debit",
       Process: "Pending",
-      TypeOf: "Product Owner",
+      TypeOf: "Affiliate",
     });
     transactionIDFailed = Transaction._id;
 
-    // create admin transaction
     let transactionAdmin = await AdminTransactionsModel.create({
       UserId: req.user._id,
       Amount: charges,
-      Description: `Product Owner Withdrew funds: ${req.user.FullName} just withdrew NGN${body.Amount}. NGN${charges} Charges just credited.`,
+      Description: `Affiliate Withdrew funds: ${req.user.FullName} just withdrew NGN${body.Amount}. NGN${charges} Charges just credited.`,
       Type: "Credit",
       Process: "Pending",
       ref: Transaction._id,
     });
     AdminTransactionIdFailed = transactionAdmin._id;
 
-    console.log("created all transactions");
+    await BalanceModel.findOneAndUpdate({ UserID: req.user._id }, { $inc: { Balance: -body.Amount } });
 
-      // Deduct user balance immediately (mark funds as withdrawn/pending)
-      await BalanceModel.findOneAndUpdate(
-        { UserID: req.user._id },
-        { $inc: { Balance: -body.Amount } }
-      );
-
-    // Step 2: Initiate transfer
     const transferResponse = await axios.post(
       "https://api.paystack.co/transfer",
-      {
-        source: "balance",
-        amount: body.Amount * 100, // Convert to kobo
-        recipient: recipientCode,
-        reason: "Withdrawal",
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.PaystackSecret}`,
-          "Content-Type": "application/json",
-        },
-      }
+      { source: "balance", amount: body.Amount * 100, recipient: recipientCode, reason: "Withdrawal" },
+      { headers: { Authorization: `Bearer ${process.env.PaystackSecret}`, "Content-Type": "application/json" } }
     );
 
-    console.log("transfer response");
-
-    // Respond with success
-    res.status(200).json({
-      Access: true,
-      Error: false,
-      Withdrawn: true,
-      Data: transferResponse.data.data,
-    });
+    return res.status(200).json({ Access: true, Error: false, Withdrawn: true, Data: transferResponse.data.data });
   } catch (error) {
-    console.log({ error });
     if (error instanceof mongoose.Error || error.name === "MongoError") {
       res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
     } else {
       console.log(error.response || error.response.data);
-
-      // restore user balance because transfer initiation failed
       try {
         if (walletidFailed && AmountFailed) {
           await BalanceModel.findOneAndUpdate({ _id: walletidFailed }, { $inc: { Balance: AmountFailed } });
@@ -257,24 +199,10 @@ router.post("/", VerifyProductOwnerJWTToken, async (req, res) => {
         AdminTransactionId: AdminTransactionIdFailed,
       });
 
-      // update client transaction
-      await TransactionsModel.findOneAndUpdate(
-        { _id: transactionIDFailed },
-        { Process: "Failed" }
-      );
+      await TransactionsModel.findOneAndUpdate({ _id: transactionIDFailed }, { Process: "Failed" });
+      await AdminTransactionsModel.updateOne({ _id: AdminTransactionIdFailed }, { Process: "Failed" });
 
-      //update admin transaction
-      await AdminTransactionsModel.updateOne(
-        { _id: AdminTransactionIdFailed },
-        { Process: "Failed" }
-      );
-
-      return res.status(500).json({
-        Access: true,
-        Error: `Could not withdraw(${
-          Errordisplay(error).msg
-        }). Contact admin...`,
-      });
+      return res.status(500).json({ Access: true, Error: `Could not withdraw(${Errordisplay(error).msg}). Contact admin...` });
     }
   }
 });

@@ -5,7 +5,7 @@ const router = express.Router();
 
 router.get("/all", async (req, res) => {
   try {
-    const products = await ProductModel.find({}).sort({
+    const products = await ProductModel.find().populate("productOwner").sort({
       createdAt: -1,
     });
 

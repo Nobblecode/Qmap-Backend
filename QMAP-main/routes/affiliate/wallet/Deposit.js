@@ -1,7 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const {
-  VerifyProductOwnerJWTToken,
+  VerifyAffilliateMarketerJWTToken,
   Errordisplay,
 } = require("../../../utils/Auth.utils");
 const TemporaryDepositModel = require("../../../models/wallet/TemporaryDeposit.model");
@@ -16,7 +16,7 @@ const { createNotification } = require("../../../utils/Notifications.utils");
 const crypto = require('crypto');
 
 // paystack
-router.post("/initialize", VerifyProductOwnerJWTToken, async (req, res) => {
+router.post("/initialize", VerifyAffilliateMarketerJWTToken, async (req, res) => {
   try {
   const { Amount, ReturnUrl } = req.body;
 
@@ -38,7 +38,7 @@ router.post("/initialize", VerifyProductOwnerJWTToken, async (req, res) => {
     const tempTransaction = await TemporaryDepositModel.create({
       UserId: req.user._id,
       Amount,
-      TypeOf: "Product Owner",
+      TypeOf: "Affiliate",
       ReturnUrl: ReturnUrl || null,
       VerifyToken: token,
     });
@@ -61,8 +61,6 @@ router.post("/initialize", VerifyProductOwnerJWTToken, async (req, res) => {
     const callbackUrl = `${callbackBase.replace(/\/$/, '')}/payment-return?reference=${tempTransaction._id}${
       tempTransaction.ReturnUrl ? `&returnUrl=${encodeURIComponent(tempTransaction.ReturnUrl)}` : ''
     }&token=${token}`;
-
-    console.log('Paystack callback_url:', callbackUrl);
 
     const integrationResponse = (
       await axios({
@@ -102,7 +100,7 @@ router.post("/initialize", VerifyProductOwnerJWTToken, async (req, res) => {
 });
 
 // Verify payment (use instead of webhook if desired)
-router.post("/verify", VerifyProductOwnerJWTToken, async (req, res) => {
+router.post("/verify", VerifyAffilliateMarketerJWTToken, async (req, res) => {
   try {
     const { reference } = req.body;
     if (!reference) return res.status(400).json({ Access: true, Error: 'reference is required' });

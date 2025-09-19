@@ -3,7 +3,7 @@ const router = express.Router();
 const crypto = require("crypto");
 const { default: mongoose } = require("mongoose");
 const TemporaryDepositModel = require("../../models/wallet/TemporaryDeposit.model");
-const { percentagePrice } = require("../../utils/Random.utils");
+// percentagePrice no longer used for charges here; charges come from env
 const BalanceModel = require("../../models/wallet/Balance.model");
 const AdminBalanceModel = require("../../models/wallet/admin/AdminBalance.model");
 const TransactionsModel = require("../../models/wallet/Transactions.model");
@@ -30,7 +30,8 @@ router.post("/paystack", async function (req, res) {
   console.log("Client IP:", clientIP);
   console.log("Allowed IPs:", allowedIPs);
 
-  if (!allowedIPs.includes(clientIP)) {
+  // If allowed IPs are configured, enforce them; otherwise skip IP restriction (useful for dev)
+  if (allowedIPs.length > 0 && !allowedIPs.includes(clientIP)) {
     return res.status(403).send("Forbidden");
   }
 
@@ -40,9 +41,6 @@ router.post("/paystack", async function (req, res) {
     .digest("hex");
 
   if (hash == req.headers["x-paystack-signature"]) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
       // Retrieve the request's body
       const event = req.body;
@@ -53,95 +51,71 @@ router.post("/paystack", async function (req, res) {
         console.log("event11111: ", data);
 
         //get temporary transaction ref
-        let TempTransaction = await TemporaryDepositModel.findOneAndDelete({
-          _id: data.reference,
-        }).session(session);
+        let TempTransaction = await TemporaryDepositModel.findOneAndDelete({ _id: data.reference });
 
-        console.log("Temp111111: ", TempTransaction);
+        if (!TempTransaction) {
+          // Nothing to process
+          return res.status(200).send('No temporary transaction found');
+        }
 
-        let charges = percentagePrice(
-          data.amount / 100,
-          process.env.chargesdeposit
-        );
+        let charges = Number(process.env.chargesdeposit) || 0;
 
-        //update user balance
+        const fees = data.fees ? Number(data.fees) / 100 : 0;
+        const creditedAmount = data.amount / 100 - (Number(charges) + fees);
+
+        //update user balance (create if not exists)
         let newBalance = await BalanceModel.findOneAndUpdate(
           { UserID: TempTransaction.UserId },
           {
-            $inc: {
-              Balance:
-                data.amount / 100 - (Number(charges) + Number(data.fees) / 100),
-            },
-          }
-        ).session(session);
+            $inc: { Balance: creditedAmount },
+            $setOnInsert: { UserID: TempTransaction.UserId, TypeOf: TempTransaction.TypeOf },
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
 
         //update admin balance
-        await AdminBalanceModel.updateOne(
-          {},
-          {
-            $inc: {
-              TotalClientFunds:
-                data.amount / 100 - (Number(charges) + Number(data.fees) / 100),
-              EarnedBalance: charges,
-            },
-          }
-        ).session(session);
+        await AdminBalanceModel.updateOne({}, {
+          $inc: {
+            TotalClientFunds: creditedAmount,
+            EarnedBalance: charges,
+          },
+        });
 
         //create user transactions
-        await TransactionsModel.create(
-          [
-            {
-              WalletID: newBalance._id,
-              UserId: TempTransaction.UserId,
-              TransRef: data.reference,
-              Amount: data.amount / 100,
-              Title: `Deposit funds via ${data.channel}`,
-              Charges: charges,
-              Type: "Credit",
-              Process: "Success",
-              TypeOf: TempTransaction.TypeOf,
-            },
-          ],
-          { session: session }
-        );
+        await TransactionsModel.create([
+          {
+            WalletID: newBalance._id,
+            UserId: TempTransaction.UserId,
+            TransRef: data.reference,
+            Amount: data.amount / 100,
+            Title: `Deposit funds via ${data.channel}`,
+            Charges: charges,
+            Type: "Credit",
+            Process: "Success",
+            TypeOf: TempTransaction.TypeOf,
+          },
+        ]);
 
         //user details
-        let user = await ProfileModel.findOne({
-          _id: TempTransaction.UserId,
-          type: TempTransaction.TypeOf,
-        }).session(session);
+        let user = await ProfileModel.findOne({ _id: TempTransaction.UserId, type: TempTransaction.TypeOf });
 
         //create admin transaction
-        await AdminTransactionsModel.create(
-          [
-            {
-              UserId: TempTransaction.UserId,
-              Amount: charges,
-              Description: `Charges credited to Earnings:${
-                user.FullName
-              } just deposited ${data.amount / 100} through paystack(${
-                data.channel
-              }) with ref(${data.reference}).`,
-              Amount: charges,
-              Type: "Credit",
-              Process: "Success",
-            },
-          ],
-          { session: session }
-        );
+        await AdminTransactionsModel.create([
+          {
+            UserId: TempTransaction.UserId,
+            Amount: charges,
+            Description: `Charges credited to Earnings:${user.FullName} just deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
+            Amount: charges,
+            Type: "Credit",
+            Process: "Success",
+          },
+        ]);
 
         //success end task
-        await session.commitTransaction();
-        session.endSession();
-
         res.send(200);
 
         //create notication
-        const notificationMessage = `Dear ${
-          user.FullName
-        } you have successfully deposited ₦${
-          data.amount / 100 - (Number(charges) + Number(data.fees) / 100)
-        } into your account.`;
+        const notificationMessage = `Dear ${user.FullName} you have successfully deposited ₦${creditedAmount} into your account.`;
         await createNotification(user._id, notificationMessage);
 
         // send email here
@@ -150,41 +124,27 @@ router.post("/paystack", async function (req, res) {
         //data
         let data = event.data;
 
-        //get temporary transaction ref
-        let Transaction = await TransactionsModel.findOneAndUpdate(
-          { _id: data.reference },
-          { Process: "Success" }
-        ).session(session);
+  //get transaction and mark success
+  let Transaction = await TransactionsModel.findOneAndUpdate({ _id: data.reference }, { Process: "Success" });
 
         let charges = Transaction.Charges;
 
-        //update user balance
-        await BalanceModel.findOne({
-          UserID: Transaction.UserId,
-        }).session(session);
+  //update user balance (no-op here, transaction already created earlier)
+  await BalanceModel.findOne({ UserID: Transaction.UserId });
 
         //update admin balance
-        await AdminBalanceModel.updateOne(
-          {},
-          { $inc: { EarnedBalance: charges } }
-        ).session(session);
+  await AdminBalanceModel.updateOne({}, { $inc: { EarnedBalance: charges } });
 
         //update admin transaction
-        await AdminTransactionsModel.updateOne(
-          { ref: Transaction._id },
-          { Process: "Success" }
-        ).session(session);
+        await AdminTransactionsModel.updateOne({ ref: Transaction._id }, { Process: "Success" });
 
         //user details
         let user = await ProfileModel.findOne({
           _id: Transaction.UserId,
           type: Transaction.TypeOf,
-        }).session(session);
+        });
 
         //success end task
-        await session.commitTransaction();
-        session.endSession();
-
         res.send(200);
 
         //create notication
@@ -197,109 +157,70 @@ router.post("/paystack", async function (req, res) {
         //data
         let data = event.data;
 
-        //get temporary transaction ref
-        let Transaction = await TransactionsModel.findOneAndUpdate(
-          { _id: data.reference },
-          { Process: "Failed" }
-        ).session(session);
+  //mark transaction failed
+  let Transaction = await TransactionsModel.findOneAndUpdate({ _id: data.reference }, { Process: "Failed" });
 
         let charges = Transaction.Charges;
 
-        //update user balance
-        let Balance = await BalanceModel.findOneAndUpdate(
-          { UserID: Transaction.UserId },
-          { $inc: { Balance: Transaction.Amount } }
-        ).session(session);
+  //update user balance
+  let Balance = await BalanceModel.findOneAndUpdate({ UserID: Transaction.UserId }, { $inc: { Balance: Transaction.Amount } });
 
         //update admin balance
-        await AdminBalanceModel.updateOne(
-          {},
-          { $inc: { EarnedBalance: -charges } }
-        ).session(session);
+  await AdminBalanceModel.updateOne({}, { $inc: { EarnedBalance: -charges } });
 
-        //update admin transaction
-        await AdminTransactionsModel.updateOne(
-          { ref: Transaction._id },
-          { Process: "Failed" }
-        ).session(session);
+  //update admin transaction
+  await AdminTransactionsModel.updateOne({ ref: Transaction._id }, { Process: "Failed" });
 
-        //user details
-        let user = await ProfileModel.findOne({
-          _id: Transaction.UserId,
-          type: Transaction.TypeOf,
-        }).session(session);
+  //user details
+  let user = await ProfileModel.findOne({ _id: Transaction.UserId, type: Transaction.TypeOf });
 
-        //success end task
-        await session.commitTransaction();
-        session.endSession();
+  //success end task
+  res.send(200);
 
-        res.send(200);
+  //create notication
+  const notificationMessage = `Ooopss!! your withdrawal of ₦${Transaction.Amount} failed.`;
+  await createNotification(user._id, notificationMessage);
 
-        //create notication
-        const notificationMessage = `Ooopss!! your withdrawal of ₦${Transaction.Amount} failed.`;
-        await createNotification(user._id, notificationMessage);
-
-        // send email here
-        return;
+  // send email here
+  return;
       } else if (event.event == "transfer.reversed") {
         //data
         let data = event.data;
 
         //get temporary transaction ref
-        let Transaction = await TransactionsModel.findOneAndUpdate(
-          { _id: data.reference },
-          { Process: "Failed" }
-        ).session(session);
+  let Transaction = await TransactionsModel.findOneAndUpdate({ _id: data.reference }, { Process: "Failed" });
 
         let charges = Transaction.Charges;
 
-        //update user balance
-        let Balance = await BalanceModel.findOneAndUpdate(
-          { UserID: Transaction.UserId },
-          { $inc: { Balance: Transaction.Amount } }
-        ).session(session);
+  let Balance = await BalanceModel.findOneAndUpdate({ UserID: Transaction.UserId }, { $inc: { Balance: Transaction.Amount } });
 
         //update admin balance
-        await AdminBalanceModel.updateOne(
-          {},
-          { $inc: { EarnedBalance: -charges } }
-        ).session(session);
+  await AdminBalanceModel.updateOne({}, { $inc: { EarnedBalance: -charges } });
 
         //update admin transaction
-        await AdminTransactionsModel.updateOne(
-          { ref: Transaction._id },
-          { Process: "Failed" }
-        ).session(session);
+  await AdminTransactionsModel.updateOne({ ref: Transaction._id }, { Process: "Failed" });
 
         //user details
-        let user = await ProfileModel.findOne({
-          _id: Transaction.UserId,
-          type: Transaction.TypeOf,
-        }).session(session);
+  let user = await ProfileModel.findOne({ _id: Transaction.UserId, type: Transaction.TypeOf });
 
-        //success end task
-        await session.commitTransaction();
-        session.endSession();
+  //success end task
+  // finished
 
-        res.send(200);
+  res.send(200);
 
-        //create notication
-        const notificationMessage = `Ooopss!! your withdrawal of ₦${Transaction.Amount} failed.`;
-        await createNotification(user._id, notificationMessage);
+  //create notication
+  const notificationMessage = `Ooopss!! your withdrawal of ₦${Transaction.Amount} failed.`;
+  await createNotification(user._id, notificationMessage);
 
-        // send email here
-        return;
+  // send email here
+  return;
       } else {
         res.send(402);
-        await session.abortTransaction();
-        session.endSession();
         return;
       }
     } catch (error) {
       console.log(error);
       res.send(402);
-      await session.abortTransaction();
-      session.endSession();
     }
   } else {
     res.send(400);

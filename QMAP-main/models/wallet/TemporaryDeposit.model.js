@@ -20,6 +20,13 @@ const TemporaryDeposit = new Schema(
       required: [true, "type auth is required"],
       enum: ["Product Owner", "Affiliate", "Admin"],
     },
+    ReturnUrl: {
+      type: String,
+    },
+    VerifyToken: {
+      type: String,
+      index: true,
+    },
     expiresAt: {
       type: Date,
       default: Date.now,
