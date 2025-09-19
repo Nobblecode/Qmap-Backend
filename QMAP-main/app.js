@@ -86,6 +86,7 @@ app.use("/productowner/wallet", require("./routes/productOwner/wallet/Wallet"));
 app.use("/affiliate/analytics", require("./routes/affiliate/analytics/Analytics"));
 app.use("/general/wallets", require("./routes/general/wallets/Wallets"));
 app.use("/general/tracking", require("./routes/general/tracking/Tracking"));
+app.use("/general/contact", require("./routes/general/contact/Contact"));
 
 // admin client management
 app.use('/admin/clients', require('./routes/admin/clients/Clients'));
