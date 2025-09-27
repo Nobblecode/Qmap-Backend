@@ -8,7 +8,7 @@ app.use(BodyParser.json({ extended: true, limit: "50mb" }));
 
 //cors
 const cors = require("cors");
-app.use(cors());
+app.use(cors({ origin: "*" }));
 
 //dotenv
 require("dotenv").config();
