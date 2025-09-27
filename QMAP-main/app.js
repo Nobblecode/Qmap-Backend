@@ -8,16 +8,34 @@ app.use(BodyParser.json({ extended: true, limit: "50mb" }));
 
 //cors
 const cors = require("cors");
-app.use(cors({ origin: "*" }));
+app.use(cors({
+  origin: "*",
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+}));
 
 //dotenv
 require("dotenv").config();
 
 const Port = process.env.PORT || 4000;
 
-//express-filupload
+//express-fileupload
 const fileUpload = require("express-fileupload");
-app.use(fileUpload({ useTempFiles: true }));
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
+
+const tmpDir = path.join(os.tmpdir(), "uploads");
+fs.mkdirSync(tmpDir, { recursive: true });
+
+app.use(fileUpload({
+  useTempFiles: true,
+  tempFileDir: tmpDir,
+  createParentPath: true,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  abortOnLimit: true,
+}));
 
 // express-session
 app.use(
