@@ -8,6 +8,7 @@ const { uploadimg } = require("../../../utils/Cloudinary.utils");
 const { v4: uuidv4 } = require("uuid");
 const ProductModel = require("../../../models/products/Product.model");
 const AffiliateLinkModel = require("../../../models/products/AffiliateLink.model");
+const ClickTrackingModel = require("../../../models/products/ClickTracking.model");
 const router = express.Router();
 
 // Create Product
@@ -178,4 +179,123 @@ router.get("/my/products", VerifyProductOwnerJWTToken, async (req, res) => {
   }
 });
 
+// Delete a product
+router.delete('/:productId', VerifyProductOwnerJWTToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const product = await ProductModel.findById(productId);
+    if (!product) return res.status(404).json({ Access: true, Error: 'Product not found' });
+
+    // only owner can delete
+    if (!product.productOwner.equals(req.user._id)) {
+      return res.status(403).json({ Access: true, Error: 'Not authorized to delete this product' });
+    }
+
+    // Find affiliate links for this product
+    const links = await AffiliateLinkModel.find({ product: product._id }).select('_id');
+    const linkIds = links.map((l) => l._id);
+
+    // Remove click tracking for these links
+    if (linkIds.length > 0) {
+      await ClickTrackingModel.deleteMany({ affiliateLink: { $in: linkIds } });
+    }
+
+    // Remove affiliate links
+    await AffiliateLinkModel.deleteMany({ product: product._id });
+
+    // Delete the product
+    await ProductModel.findByIdAndDelete(productId);
+
+    // Refund reserved funds back to owner's balance (if any)
+    try {
+      await BalanceModel.findOneAndUpdate(
+        { UserID: req.user._id, TypeOf: 'Product Owner' },
+        { $inc: { Balance: product.expectedCost || 0, Reserved: -(product.expectedCost || 0) } }
+      );
+    } catch (refundErr) {
+      console.error('Refund after product delete failed', refundErr);
+    }
+
+    return res.json({ Access: true, Message: 'Product deleted' });
+  } catch (error) {
+    return res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
+  }
+});
+
+// Update Product
+router.put('/:productId', VerifyProductOwnerJWTToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    // find product
+    const product = await ProductModel.findById(productId);
+    if (!product) return res.status(404).json({ Access: true, Error: 'Product not found' });
+
+    // only owner can update
+    if (!product.productOwner.equals(req.user._id)) {
+      return res.status(403).json({ Access: true, Error: 'Not authorized to edit this product' });
+    }
+
+    const image = req.files?.image;
+    let uploadedImage;
+    if (image) {
+      uploadedImage = await uploadimg(image, process.env.Images);
+      if (uploadedImage.error) {
+        return res.status(500).json({ Access: true, Error: 'Error Occured uploading image' });
+      }
+      product.imageUrl = uploadedImage.url;
+      product.imagePublicId = uploadedImage.publicID;
+    }
+
+    // Allowed fields to update
+    const { name, description, currency, affiliateCommission, affiliateLink, maxClicks, isActive } = req.body;
+
+    // Compute new expected cost if commission/maxClicks provided
+    const newAffiliateCommission = typeof affiliateCommission !== 'undefined' ? parseFloat(affiliateCommission) : product.affiliateCommission;
+    const newMaxClicks = typeof maxClicks !== 'undefined' ? parseInt(maxClicks, 10) : product.maxClicks;
+    const newExpectedCost = newAffiliateCommission * newMaxClicks;
+
+    // If expected cost changed, adjust owner's balance/reserved accordingly
+    if (newExpectedCost !== product.expectedCost) {
+      const diff = newExpectedCost - product.expectedCost; // positive means more reserved required
+      const ownerBalance = await BalanceModel.findOne({ UserID: req.user._id, TypeOf: 'Product Owner' });
+      if (!ownerBalance) return res.status(400).json({ Access: true, Error: 'Owner balance not found' });
+
+      if (diff > 0) {
+        // need to reserve additional funds
+        if (ownerBalance.Balance < diff) {
+          return res.status(400).json({ Access: true, Error: `Insufficient balance to increase expected cost by ${diff}` });
+        }
+        await BalanceModel.findOneAndUpdate({ UserID: req.user._id, TypeOf: 'Product Owner' }, { $inc: { Balance: -diff, Reserved: diff } });
+      } else if (diff < 0) {
+        // release reserved funds
+        await BalanceModel.findOneAndUpdate({ UserID: req.user._id, TypeOf: 'Product Owner' }, { $inc: { Balance: -diff, Reserved: diff } });
+        // Note: diff is negative so -diff adds to Balance, Reserved decreases
+      }
+
+      product.expectedCost = newExpectedCost;
+      product.affiliateCommission = newAffiliateCommission;
+      product.maxClicks = newMaxClicks;
+    }
+
+    if (typeof name !== 'undefined') product.name = name;
+    if (typeof description !== 'undefined') product.description = description;
+    if (typeof currency !== 'undefined') product.currency = currency;
+    if (typeof affiliateLink !== 'undefined') product.affiliateLink = affiliateLink;
+    if (typeof isActive !== 'undefined') product.isActive = Boolean(isActive);
+
+    await product.save();
+
+    return res.json({
+      Access: true,
+      Message: 'Product updated',
+      product,
+    });
+  } catch (error) {
+    return res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
+  }
+});
+
 module.exports = router;
+

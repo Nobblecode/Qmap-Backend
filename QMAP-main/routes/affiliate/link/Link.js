@@ -127,17 +127,21 @@ router.get("/api/redirect/:linkId", async (req, res) => {
         .json({ Access: true, Error: "Product is no longer available" });
     }
 
-    // Prevent duplicate clicks from same IP + userAgent within 24 hours
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Determine destination early (prefer the product's original affiliate URL)
+    const destination = product.affiliateLink && product.affiliateLink.trim().length > 0
+      ? product.affiliateLink
+      : `${req.protocol}://${req.get('host')}/product-owner-dashboard/${product.uniqueProductId}`;
+
+    // Prevent duplicate clicks from the same IP + userAgent (count only once ever)
     const alreadyClicked = await ClickTrackingModel.findOne({
       affiliateLink: affiliateLink._id,
       ipAddress: req.ip,
-      userAgent: req.get('User-Agent'),
-      createdAt: { $gte: twentyFourHoursAgo }
+      userAgent: req.get('User-Agent')
     });
 
+    // If the same visitor already clicked this affiliate link before, do not count again — redirect immediately
     if (alreadyClicked) {
-      return res.status(400).json({ Access: true, Error: 'You already clicked this link' });
+      return res.redirect(destination);
     }
 
     // Track the click
@@ -161,19 +165,19 @@ router.get("/api/redirect/:linkId", async (req, res) => {
     await affiliateLink.save();
     await product.save();
     // await affiliateLink.affiliateMarketer.save();
-    await BalanceModel.findOneAndUpdate(
+    // Credit affiliate balance and earned amount; create balance doc if missing
+    const Balance = await BalanceModel.findOneAndUpdate(
       { UserID: affiliateLink.affiliateMarketer, TypeOf: "Affiliate" },
-      { $inc: { Balance: commission } }
+      {
+        $inc: { Balance: commission, Earned: commission },
+        $setOnInsert: { UserID: affiliateLink.affiliateMarketer, TypeOf: "Affiliate" },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-
-    const Balance = await BalanceModel.findOne({
-      UserID: affiliateLink.affiliateMarketer,
-      TypeOf: "Affiliate",
-    });
 
     // Record commission transaction
     const transaction = new TransactionsModel({
-      WalletID: Balance._id,
+      WalletID: Balance ? Balance._id : null,
       UserId: affiliateLink.affiliateMarketer,
       TransRef: affiliateLink._id,
       Amount: commission,
@@ -218,11 +222,7 @@ router.get("/api/redirect/:linkId", async (req, res) => {
       }
     }
 
-    // Redirect to the actual product affiliate URL if provided, otherwise fallback to product page
-    const destination = product.affiliateLink && product.affiliateLink.trim().length > 0
-      ? product.affiliateLink
-      : `${req.protocol}://${req.get('host')}/product-owner-dashboard/${product.uniqueProductId}`;
-
+    // Redirect the user to the actual product affiliate URL (or fallback page)
     return res.redirect(destination);
   } catch (error) {
     res.status(400).json({ Access: true, Error: Errordisplay(error).msg });

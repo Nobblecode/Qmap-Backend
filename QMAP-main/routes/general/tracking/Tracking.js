@@ -22,15 +22,15 @@ router.post('/click/:uniqueLinkId', async (req, res) => {
       return res.status(400).json({ Access: true, Error: 'Product not available' });
     }
 
-    // Prevent duplicate clicks from same IP + userAgent within 24 hours
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Prevent duplicate clicks from same IP + userAgent (count only once ever)
     const alreadyClicked = await ClickTrackingModel.findOne({
       affiliateLink: affiliateLink._id,
       ipAddress: req.ip,
-      userAgent: req.get('User-Agent'),
-      createdAt: { $gte: twentyFourHoursAgo }
+      userAgent: req.get('User-Agent')
     });
-    if (alreadyClicked) return res.status(400).json({ Access: true, Error: 'You already clicked this link' });
+
+    // If duplicate, respond success but do not count again
+    if (alreadyClicked) return res.json({ Access: true, Message: 'Click already recorded' });
 
     const click = new ClickTrackingModel({
       affiliateLink: affiliateLink._id,
@@ -48,14 +48,13 @@ router.post('/click/:uniqueLinkId', async (req, res) => {
     await affiliateLink.save();
     await product.save();
 
-    // Credit affiliate balance for this click
-    await BalanceModel.findOneAndUpdate(
+    // Credit affiliate balance for this click (increment Earned too); create balance doc if missing
+    const Balance = await BalanceModel.findOneAndUpdate(
       { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' },
-      { $inc: { Balance: commission } },
-      { upsert: true }
+      { $inc: { Balance: commission, Earned: commission }, $setOnInsert: { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    const Balance = await BalanceModel.findOne({ UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' });
     const transaction = new TransactionsModel({
       WalletID: Balance ? Balance._id : null,
       UserId: affiliateLink.affiliateMarketer,
@@ -129,13 +128,12 @@ router.post('/conversion/:uniqueLinkId', async (req, res) => {
     // Compute conversion commission (could be same as affiliateCommission)
     // Conversion commission uses affiliateCommission; credit affiliate balance
     const commission = product.affiliateCommission || 0;
-    await BalanceModel.findOneAndUpdate(
+    const Balance = await BalanceModel.findOneAndUpdate(
       { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' },
-      { $inc: { Balance: commission } },
-      { upsert: true }
+      { $inc: { Balance: commission, Earned: commission }, $setOnInsert: { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    const Balance = await BalanceModel.findOne({ UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' });
     const transaction = new TransactionsModel({
       WalletID: Balance ? Balance._id : null,
       UserId: affiliateLink.affiliateMarketer,
