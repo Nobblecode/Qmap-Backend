@@ -9,6 +9,9 @@ const crypto = require("crypto");
 const ClickTrackingModel = require("../../../models/products/ClickTracking.model");
 const BalanceModel = require("../../../models/wallet/Balance.model");
 const TransactionsModel = require("../../../models/wallet/Transactions.model");
+const ProfileModel = require('../../../models/user/Profile.model');
+const { createNotification } = require('../../../utils/Notifications.utils');
+const { Sendmail } = require('../../../utils/Mailer.utils');
 const router = express.Router();
 
 // Generate Affiliate Link
@@ -58,7 +61,7 @@ router.post(
             id: affiliateLink._id,
             uniqueLinkId: affiliateLink.uniqueLinkId,
             clickCount: affiliateLink.clickCount,
-            totalEarnings: affiliateLink.totalEarnings,
+            totalEarnings: affiliateLink.clickCount * product.affiliateCommission,
             shareUrl: `${req.protocol}://${req.get(
               "host"
             )}/product/api/redirect/${affiliateLink.uniqueLinkId}`,
@@ -85,7 +88,7 @@ router.post(
           id: affiliateLink._id,
           uniqueLinkId: affiliateLink.uniqueLinkId,
           clickCount: affiliateLink.clickCount,
-          totalEarnings: affiliateLink.totalEarnings,
+          totalEarnings: (affiliateLink.clickCount || 0) * (product.affiliateCommission || 0),
           shareUrl: `${req.protocol}://${req.get(
             "host"
           )}/product/api/redirect/${affiliateLink.uniqueLinkId}`,
@@ -124,15 +127,17 @@ router.get("/api/redirect/:linkId", async (req, res) => {
         .json({ Access: true, Error: "Product is no longer available" });
     }
 
+    // Prevent duplicate clicks from same IP + userAgent within 24 hours
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const alreadyClicked = await ClickTrackingModel.findOne({
       affiliateLink: affiliateLink._id,
       ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: { $gte: twentyFourHoursAgo }
     });
 
     if (alreadyClicked) {
-      return res
-        .status(400)
-        .json({ Access: true, Error: "You already clicked this link" });
+      return res.status(400).json({ Access: true, Error: 'You already clicked this link' });
     }
 
     // Track the click
@@ -149,7 +154,7 @@ router.get("/api/redirect/:linkId", async (req, res) => {
 
     // Calculate and add commission to affiliate's balance
     const commission = product.affiliateCommission;
-    affiliateLink.totalEarnings += commission;
+  // totalEarnings is computed dynamically as clickCount * affiliateCommission
     // affiliateLink.affiliateMarketer.balance += commission;
 
     // Save updates
@@ -194,13 +199,31 @@ router.get("/api/redirect/:linkId", async (req, res) => {
         { product: product._id },
         { isActive: false }
       );
+      // Notify product owner
+      try {
+        const owner = await ProfileModel.findById(product.productOwner).lean();
+        if (owner) {
+          const message = `Dear ${owner.FullName}, your product \"${product.name}\" has been disabled because it reached its maximum number of clicks.`;
+          createNotification(owner._id, message).catch(() => {});
+          try {
+            const subject = `Your product \"${product.name}\" has been disabled`;
+            const html = `<p>Dear ${owner.FullName},</p><p>Your product "<strong>${product.name}</strong>" has been disabled because it reached its maximum number of clicks (${product.maxClicks}).</p><p>Please, edit or delete the product if it's not needed anymore</p>`;
+            Sendmail(owner.Email, subject, html).catch((e) => console.error('Sendmail error:', e));
+          } catch (mailErr) {
+            console.error('Sendmail error:', mailErr);
+          }
+        }
+      } catch (err) {
+        console.error('Notification error:', err.message || err);
+      }
     }
 
-    // Redirect to the actual product page or landing page
-    // Replace with your actual product URL
-    res.redirect(
-      `https://qmap.com.ng/product-owner-dashboard/${product.uniqueProductId}`
-    );
+    // Redirect to the actual product affiliate URL if provided, otherwise fallback to product page
+    const destination = product.affiliateLink && product.affiliateLink.trim().length > 0
+      ? product.affiliateLink
+      : `${req.protocol}://${req.get('host')}/product-owner-dashboard/${product.uniqueProductId}`;
+
+    return res.redirect(destination);
   } catch (error) {
     res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
   }

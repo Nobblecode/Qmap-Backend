@@ -5,6 +5,9 @@ const ClickTrackingModel = require('../../../models/products/ClickTracking.model
 const ProductModel = require('../../../models/products/Product.model');
 const BalanceModel = require('../../../models/wallet/Balance.model');
 const TransactionsModel = require('../../../models/wallet/Transactions.model');
+const ProfileModel = require('../../../models/user/Profile.model');
+const { createNotification } = require('../../../utils/Notifications.utils');
+const { Sendmail } = require('../../../utils/Mailer.utils');
 
 // Record a click (client-side ping)
 router.post('/click/:uniqueLinkId', async (req, res) => {
@@ -19,8 +22,14 @@ router.post('/click/:uniqueLinkId', async (req, res) => {
       return res.status(400).json({ Access: true, Error: 'Product not available' });
     }
 
-    // Prevent duplicate clicks from same IP
-    const alreadyClicked = await ClickTrackingModel.findOne({ affiliateLink: affiliateLink._id, ipAddress: req.ip });
+    // Prevent duplicate clicks from same IP + userAgent within 24 hours
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const alreadyClicked = await ClickTrackingModel.findOne({
+      affiliateLink: affiliateLink._id,
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      createdAt: { $gte: twentyFourHoursAgo }
+    });
     if (alreadyClicked) return res.status(400).json({ Access: true, Error: 'You already clicked this link' });
 
     const click = new ClickTrackingModel({
@@ -34,12 +43,12 @@ router.post('/click/:uniqueLinkId', async (req, res) => {
     affiliateLink.clickCount += 1;
     product.currentClicks += 1;
     const commission = product.affiliateCommission || 0;
-    affiliateLink.totalEarnings += commission;
 
+    // Do not rely on stored totalEarnings (compute when needed)
     await affiliateLink.save();
     await product.save();
 
-    // Credit affiliate balance
+    // Credit affiliate balance for this click
     await BalanceModel.findOneAndUpdate(
       { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' },
       { $inc: { Balance: commission } },
@@ -60,15 +69,35 @@ router.post('/click/:uniqueLinkId', async (req, res) => {
     });
     await transaction.save();
 
-    // Mark commission as paid for the click
-    click.commissionPaid = true;
-    await click.save();
+  // Mark commission as paid for the click
+  click.commissionPaid = true;
+  await click.save();
 
     // Deactivate if max clicks reached
     if (product.currentClicks >= product.maxClicks) {
       product.isActive = false;
       await product.save();
       await AffiliateLinkModel.updateMany({ product: product._id }, { isActive: false });
+      // Notify product owner about deactivation
+      try {
+        const owner = await ProfileModel.findById(product.productOwner).lean();
+        if (owner) {
+          const message = `Dear ${owner.FullName}, your product \"${product.name}\" has been disabled because it reached its maximum number of clicks.`;
+          // fire-and-forget notification
+          createNotification(owner._id, message).catch(() => {});
+          // send email to product owner
+          try {
+            const subject = `Your product \"${product.name}\" has been disabled`;
+            const html = `<p>Dear ${owner.FullName},</p><p>Your product "<strong>${product.name}</strong>" has been disabled because it reached its maximum number of clicks (${product.maxClicks}).</p><p>Please, edit or delete the product if it's not needed anymore</p>`;
+            Sendmail(owner.Email, subject, html).catch((e) => console.error('Sendmail error:', e));
+          } catch (mailErr) {
+            console.error('Sendmail error:', mailErr);
+          }
+        }
+      } catch (err) {
+        // swallow notification errors
+        console.error('Notification error:', err.message || err);
+      }
     }
 
     res.json({ Access: true, Message: 'Click recorded' });
@@ -98,9 +127,8 @@ router.post('/conversion/:uniqueLinkId', async (req, res) => {
     await click.save();
 
     // Compute conversion commission (could be same as affiliateCommission)
+    // Conversion commission uses affiliateCommission; credit affiliate balance
     const commission = product.affiliateCommission || 0;
-
-    // Credit affiliate balance for conversion
     await BalanceModel.findOneAndUpdate(
       { UserID: affiliateLink.affiliateMarketer, TypeOf: 'Affiliate' },
       { $inc: { Balance: commission } },

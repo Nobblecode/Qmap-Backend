@@ -129,12 +129,27 @@ router.get("/:productId", async (req, res) => {
     }
 
     // Check if user is the product owner or return limited info
+    const rawLinks = await AffiliateLinkModel.find({ product: productId })
+      .populate("affiliateMarketer", "FullName Email")
+      .select("uniqueLinkId clickCount totalEarnings isActive createdAt");
+
+    const affiliateLinks = rawLinks.map((l) => {
+      const computedEarnings = (l.clickCount || 0) * (product.affiliateCommission || 0);
+      return {
+        _id: l._id,
+        uniqueLinkId: l.uniqueLinkId,
+        clickCount: l.clickCount,
+        totalEarnings: computedEarnings,
+        isActive: l.isActive,
+        createdAt: l.createdAt,
+        affiliateMarketer: l.affiliateMarketer,
+      };
+    });
+
     res.json({
       Access: true,
       product,
-      affiliateLinks: await AffiliateLinkModel.find({ product: productId })
-        .populate("affiliateMarketer", "FullName Email")
-        .select("uniqueLinkId clickCount totalEarnings isActive createdAt"),
+      affiliateLinks,
     });
   } catch (error) {
     res.status(400).json({ Access: true, Error: Errordisplay(error).msg });

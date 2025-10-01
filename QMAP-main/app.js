@@ -62,54 +62,58 @@ mongoose
   .connect(process.env.mongoUri)
   .then(() => {
     console.log("db connected");
+
+    // register routes (after DB is ready)
+    app.use("/admin/auth/login", require("./routes/admin/auth/Login"));
+    app.use(
+      "/productowner/auth/register",
+      require("./routes/productOwner/auth/Register")
+    );
+    app.use(
+      "/productowner/auth/login",
+      require("./routes/productOwner/auth/Login")
+    );
+    app.use(
+      "/affiliate/auth/register",
+      require("./routes/affiliate/auth/Register")
+    );
+    app.use("/affiliate/auth/login", require("./routes/affiliate/auth/Login"));
+    app.use(
+      "/productowner/products",
+      require("./routes/productOwner/product/Product")
+    );
+    app.use("/product", require("./routes/affiliate/link/Link"));
+    app.use("/general/products", require("./routes/general/products/Products"));
+    app.use(
+      "/productowner/wallet/deposit",
+      require("./routes/productOwner/wallet/Deposit")
+    );
+    app.use(
+      "/productowner/wallet/withdraw",
+      require("./routes/productOwner/wallet/Withdraw")
+    );
+    app.use("/webhook", require("./routes/general/Webhook"));
+    // new endpoints
+    app.use(
+      "/productowner/wallet",
+      require("./routes/productOwner/wallet/Wallet")
+    );
+    app.use("/affiliate/analytics", require("./routes/affiliate/analytics/Analytics"));
+    app.use("/general/wallets", require("./routes/general/wallets/Wallets"));
+    app.use("/general/tracking", require("./routes/general/tracking/Tracking"));
+    app.use("/general/contact", require("./routes/general/contact/Contact"));
+
+    // admin client management
+    app.use('/admin/clients', require('./routes/admin/clients/Clients'));
+
+    // affiliate wallet endpoints
+    app.use("/affiliate/wallet/deposit", require("./routes/affiliate/wallet/Deposit"));
+    app.use("/affiliate/wallet/withdraw", require("./routes/affiliate/wallet/Withdraw"));
+    app.use("/affiliate/wallet", require("./routes/affiliate/wallet/Wallet"));
+
+    //run server
+    app.listen(Port, () => console.log(`http://localhost:${Port}`));
   })
   .catch((error) => {
     console.error("Error connecting to the database:", error);
   });
-
-//run server
-app.listen(Port, () => console.log(`http://localhost:${Port}`));
-
-app.use("/admin/auth/login", require("./routes/admin/auth/Login"));
-app.use(
-  "/productowner/auth/register",
-  require("./routes/productOwner/auth/Register")
-);
-app.use(
-  "/productowner/auth/login",
-  require("./routes/productOwner/auth/Login")
-);
-app.use(
-  "/affiliate/auth/register",
-  require("./routes/affiliate/auth/Register")
-);
-app.use("/affiliate/auth/login", require("./routes/affiliate/auth/Login"));
-app.use(
-  "/productowner/products",
-  require("./routes/productOwner/product/Product")
-);
-app.use("/product", require("./routes/affiliate/link/Link"));
-app.use("/general/products", require("./routes/general/products/Products"));
-app.use(
-  "/productowner/wallet/deposit",
-  require("./routes/productOwner/wallet/Deposit")
-);
-app.use(
-  "/productowner/wallet/withdraw",
-  require("./routes/productOwner/wallet/Withdraw")
-);
-app.use("/webhook", require("./routes/general/Webhook"));
-// new endpoints
-app.use("/productowner/wallet", require("./routes/productOwner/wallet/Wallet"));
-app.use("/affiliate/analytics", require("./routes/affiliate/analytics/Analytics"));
-app.use("/general/wallets", require("./routes/general/wallets/Wallets"));
-app.use("/general/tracking", require("./routes/general/tracking/Tracking"));
-app.use("/general/contact", require("./routes/general/contact/Contact"));
-
-// admin client management
-app.use('/admin/clients', require('./routes/admin/clients/Clients'));
-
-// affiliate wallet endpoints
-app.use("/affiliate/wallet/deposit", require("./routes/affiliate/wallet/Deposit"));
-app.use("/affiliate/wallet/withdraw", require("./routes/affiliate/wallet/Withdraw"));
-app.use("/affiliate/wallet", require("./routes/affiliate/wallet/Wallet"));

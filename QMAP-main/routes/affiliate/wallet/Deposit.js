@@ -124,9 +124,9 @@ router.post("/verify", VerifyAffilliateMarketerJWTToken, async (req, res) => {
       }
       const storedReturnUrl = TempTransaction.ReturnUrl || null;
 
-      const fees = data.fees ? Number(data.fees) / 100 : 0;
-      const charges = Number(process.env.chargesdeposit) || 0;
-      const creditedAmount = data.amount / 100 - (Number(charges) + fees);
+  const fees = data.fees ? Number(data.fees) / 100 : 0;
+  const platformCharges = Number(process.env.chargesdeposit) || 0;
+  const creditedAmount = data.amount / 100;
 
       // update or create user balance (safe arithmetic)
       const newBalance = await BalanceModel.findOneAndUpdate(
@@ -142,7 +142,7 @@ router.post("/verify", VerifyAffilliateMarketerJWTToken, async (req, res) => {
       await AdminBalanceModel.updateOne({}, {
         $inc: {
           TotalClientFunds: creditedAmount,
-          EarnedBalance: charges
+          EarnedBalance: 0
         }
       });
 
@@ -154,7 +154,7 @@ router.post("/verify", VerifyAffilliateMarketerJWTToken, async (req, res) => {
           TransRef: data.reference,
           Amount: data.amount / 100,
           Title: `Deposit funds via ${data.channel}`,
-          Charges: charges,
+           Charges: 0,
           Type: 'Credit',
           Process: 'Success',
           TypeOf: TempTransaction.TypeOf
@@ -165,15 +165,17 @@ router.post("/verify", VerifyAffilliateMarketerJWTToken, async (req, res) => {
       const user = await ProfileModel.findOne({ _id: TempTransaction.UserId, type: TempTransaction.TypeOf });
 
       // create admin transaction
-      await AdminTransactionsModel.create([
-        {
-          UserId: TempTransaction.UserId,
-          Amount: charges,
-          Description: `Charges credited to Earnings:${user ? user.FullName : ''} deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
-          Type: 'Credit',
-          Process: 'Success',
-        }
-      ]);
+      if (platformCharges > 0) {
+        await AdminTransactionsModel.create([
+          {
+            UserId: TempTransaction.UserId,
+            Amount: platformCharges,
+            Description: `Charges credited to Earnings:${user ? user.FullName : ''} deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
+            Type: 'Credit',
+            Process: 'Success',
+          }
+        ]);
+      }
 
       // send notification (no await blocking)
       if (user) createNotification(user._id, `Dear ${user.FullName}, you have successfully deposited ₦${creditedAmount} into your account.`).catch(()=>{});
@@ -210,9 +212,9 @@ router.post('/verify-public', async (req, res) => {
       const TempTransaction = await TemporaryDepositModel.findOneAndDelete({ _id: reference, VerifyToken: token });
       if (!TempTransaction) return res.status(404).json({ Access: true, Error: 'Temporary transaction not found or already processed' });
 
-      const fees = data.fees ? Number(data.fees) / 100 : 0;
-      const charges = Number(process.env.chargesdeposit) || 0;
-      const creditedAmountPublic = data.amount / 100 - (Number(charges) + fees);
+  const fees = data.fees ? Number(data.fees) / 100 : 0;
+  const platformCharges = Number(process.env.chargesdeposit) || 0;
+  const creditedAmountPublic = data.amount / 100;
 
       // update or create user balance
       const newBalance = await BalanceModel.findOneAndUpdate(
@@ -227,7 +229,7 @@ router.post('/verify-public', async (req, res) => {
       await AdminBalanceModel.updateOne({}, {
         $inc: {
           TotalClientFunds: creditedAmountPublic,
-          EarnedBalance: charges
+          EarnedBalance: 0
         }
       });
 
@@ -237,7 +239,7 @@ router.post('/verify-public', async (req, res) => {
         TransRef: data.reference,
         Amount: data.amount / 100,
         Title: `Deposit funds via ${data.channel}`,
-        Charges: charges,
+         Charges: 0,
         Type: 'Credit',
         Process: 'Success',
         TypeOf: TempTransaction.TypeOf
@@ -245,13 +247,15 @@ router.post('/verify-public', async (req, res) => {
 
       const user = await ProfileModel.findOne({ _id: TempTransaction.UserId, type: TempTransaction.TypeOf });
 
-      await AdminTransactionsModel.create([{
-        UserId: TempTransaction.UserId,
-        Amount: charges,
-        Description: `Charges credited to Earnings:${user ? user.FullName : ''} deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
-        Type: 'Credit',
-        Process: 'Success'
-      }]);
+      if (platformCharges > 0) {
+        await AdminTransactionsModel.create([{
+          UserId: TempTransaction.UserId,
+          Amount: platformCharges,
+          Description: `Charges credited to Earnings:${user ? user.FullName : ''} deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
+          Type: 'Credit',
+          Process: 'Success'
+        }]);
+      }
 
       // delete temp
       await TemporaryDepositModel.deleteOne({ _id: reference, VerifyToken: token });

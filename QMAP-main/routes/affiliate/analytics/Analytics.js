@@ -7,13 +7,15 @@ const router = express.Router();
 // Get performance stats for authenticated affiliate across products
 router.get("/my/stats", VerifyAffilliateMarketerJWTToken, async (req, res) => {
   try {
-    const links = await AffiliateLinkModel.find({ affiliateMarketer: req.user._id }).populate('product');
+    // Only include links that have at least one click
+    const links = await AffiliateLinkModel.find({ affiliateMarketer: req.user._id, clickCount: { $gt: 0 } }).populate('product');
 
     const stats = links.map(link => ({
       productId: link.product?._id || null,
       productName: link.product?.name || 'Unknown',
       clicks: link.clickCount || 0,
-      totalEarnings: link.totalEarnings || 0,
+      // conversion value: total clicks * affiliateCommission
+      totalEarnings: (link.clickCount || 0) * (link.product?.affiliateCommission || 0),
       isActive: link.isActive,
       shareUrl: `${req.protocol}://${req.get('host')}/product/api/redirect/${link.uniqueLinkId}`,
     }));

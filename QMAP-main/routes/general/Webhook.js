@@ -58,10 +58,10 @@ router.post("/paystack", async function (req, res) {
           return res.status(200).send('No temporary transaction found');
         }
 
-        let charges = Number(process.env.chargesdeposit) || 0;
-
-        const fees = data.fees ? Number(data.fees) / 100 : 0;
-        const creditedAmount = data.amount / 100 - (Number(charges) + fees);
+  let platformCharges = Number(process.env.chargesdeposit) || 0;
+  const fees = data.fees ? Number(data.fees) / 100 : 0;
+  // Credit full amount to user; platform covers fees/charges
+  const creditedAmount = data.amount / 100;
 
         //update user balance (create if not exists)
         let newBalance = await BalanceModel.findOneAndUpdate(
@@ -77,7 +77,7 @@ router.post("/paystack", async function (req, res) {
         await AdminBalanceModel.updateOne({}, {
           $inc: {
             TotalClientFunds: creditedAmount,
-            EarnedBalance: charges,
+            EarnedBalance: 0,
           },
         });
 
@@ -89,7 +89,7 @@ router.post("/paystack", async function (req, res) {
             TransRef: data.reference,
             Amount: data.amount / 100,
             Title: `Deposit funds via ${data.channel}`,
-            Charges: charges,
+            Charges: 0,
             Type: "Credit",
             Process: "Success",
             TypeOf: TempTransaction.TypeOf,
@@ -100,22 +100,23 @@ router.post("/paystack", async function (req, res) {
         let user = await ProfileModel.findOne({ _id: TempTransaction.UserId, type: TempTransaction.TypeOf });
 
         //create admin transaction
-        await AdminTransactionsModel.create([
-          {
-            UserId: TempTransaction.UserId,
-            Amount: charges,
-            Description: `Charges credited to Earnings:${user.FullName} just deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
-            Amount: charges,
-            Type: "Credit",
-            Process: "Success",
-          },
-        ]);
+        if (platformCharges > 0) {
+          await AdminTransactionsModel.create([
+            {
+              UserId: TempTransaction.UserId,
+              Amount: platformCharges,
+              Description: `Charges credited to Earnings:${user.FullName} just deposited ${data.amount / 100} through paystack(${data.channel}) with ref(${data.reference}).`,
+              Type: "Credit",
+              Process: "Success",
+            },
+          ]);
+        }
 
         //success end task
         res.send(200);
 
         //create notication
-        const notificationMessage = `Dear ${user.FullName} you have successfully deposited ₦${creditedAmount} into your account.`;
+  const notificationMessage = `Dear ${user.FullName} you have successfully deposited ₦${creditedAmount} into your account.`;
         await createNotification(user._id, notificationMessage);
 
         // send email here
