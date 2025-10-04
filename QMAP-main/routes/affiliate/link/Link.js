@@ -103,6 +103,8 @@ router.post(
 // Route 3: Handle Link Clicks and Redirects
 router.get("/api/redirect/:linkId", async (req, res) => {
   try {
+    // Logging for debugging: track incoming requests
+    console.log(`[AffiliateLink] Redirect route hit: linkId=${req.params.linkId}, ip=${req.ip}, userAgent=${req.get('User-Agent')}, time=${new Date().toISOString()}`);
     const { linkId } = req.params;
 
     // Find affiliate link
@@ -141,6 +143,7 @@ router.get("/api/redirect/:linkId", async (req, res) => {
 
     // If the same visitor already clicked this affiliate link before, do not count again — redirect immediately
     if (alreadyClicked) {
+      console.log(`[AffiliateLink] Already clicked: linkId=${linkId}, ip=${req.ip}, userAgent=${req.get('User-Agent')}`);
       return res.redirect(destination);
     }
 
@@ -151,6 +154,8 @@ router.get("/api/redirect/:linkId", async (req, res) => {
       userAgent: req.get("User-Agent"),
     });
     await clickTracking.save();
+
+    console.log(`[AffiliateLink] New click tracked: linkId=${linkId}, ip=${req.ip}, userAgent=${req.get('User-Agent')}`);
 
     // Update click counts
     affiliateLink.clickCount += 1;
