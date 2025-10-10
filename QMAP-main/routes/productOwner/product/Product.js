@@ -237,10 +237,10 @@ router.put('/:productId', VerifyProductOwnerJWTToken, async (req, res) => {
       return res.status(403).json({ Access: true, Error: 'Not authorized to edit this product' });
     }
 
+    // optional image upload
     const image = req.files?.image;
-    let uploadedImage;
     if (image) {
-      uploadedImage = await uploadimg(image, process.env.Images);
+      const uploadedImage = await uploadimg(image, process.env.Images);
       if (uploadedImage.error) {
         return res.status(500).json({ Access: true, Error: 'Error Occured uploading image' });
       }
@@ -249,16 +249,37 @@ router.put('/:productId', VerifyProductOwnerJWTToken, async (req, res) => {
     }
 
     // Allowed fields to update
-    const { name, description, currency, affiliateCommission, affiliateLink, maxClicks, isActive } = req.body;
+    const { name, description, currency, affiliateCommission, affiliateLink, maxClicks } = req.body;
 
-    // Compute new expected cost if commission/maxClicks provided
-    const newAffiliateCommission = typeof affiliateCommission !== 'undefined' ? parseFloat(affiliateCommission) : product.affiliateCommission;
-    const newMaxClicks = typeof maxClicks !== 'undefined' ? parseInt(maxClicks, 10) : product.maxClicks;
-    const newExpectedCost = newAffiliateCommission * newMaxClicks;
+    // Determine if maxClicks was provided (and not empty string)
+    const hasMaxClicksUpdate = typeof maxClicks !== 'undefined' && String(maxClicks).trim() !== '';
+
+    // Safe parse affiliateCommission
+    const hasAffiliateCommissionUpdate =
+      typeof affiliateCommission !== 'undefined' && String(affiliateCommission).trim() !== '';
+    const parsedAffiliateCommission = hasAffiliateCommissionUpdate
+      ? parseFloat(affiliateCommission)
+      : product.affiliateCommission;
+
+    if (hasAffiliateCommissionUpdate && (isNaN(parsedAffiliateCommission) || parsedAffiliateCommission < 0)) {
+      return res.status(400).json({ Access: true, Error: 'Invalid affiliateCommission value' });
+    }
+
+    // Safe parse maxClicks
+    const parsedMaxClicks = hasMaxClicksUpdate ? parseInt(maxClicks, 10) : product.maxClicks;
+    if (hasMaxClicksUpdate && (isNaN(parsedMaxClicks) || parsedMaxClicks < 1)) {
+      return res.status(400).json({ Access: true, Error: 'Invalid maxClicks value' });
+    }
+
+    const newAffiliateCommission = parsedAffiliateCommission;
+    const newMaxClicks = parsedMaxClicks;
+
+    // Compute new expected cost
+    const newExpectedCost = (typeof newAffiliateCommission === 'number' && !isNaN(newAffiliateCommission) ? newAffiliateCommission : 0) * (typeof newMaxClicks === 'number' && !isNaN(newMaxClicks) ? newMaxClicks : 0);
 
     // If expected cost changed, adjust owner's balance/reserved accordingly
-    if (newExpectedCost !== product.expectedCost) {
-      const diff = newExpectedCost - product.expectedCost; // positive means more reserved required
+    if (typeof product.expectedCost === 'number' && newExpectedCost !== product.expectedCost) {
+      const diff = newExpectedCost - product.expectedCost; // positive => need to reserve more
       const ownerBalance = await BalanceModel.findOne({ UserID: req.user._id, TypeOf: 'Product Owner' });
       if (!ownerBalance) return res.status(400).json({ Access: true, Error: 'Owner balance not found' });
 
@@ -267,32 +288,88 @@ router.put('/:productId', VerifyProductOwnerJWTToken, async (req, res) => {
         if (ownerBalance.Balance < diff) {
           return res.status(400).json({ Access: true, Error: `Insufficient balance to increase expected cost by ${diff}` });
         }
-        await BalanceModel.findOneAndUpdate({ UserID: req.user._id, TypeOf: 'Product Owner' }, { $inc: { Balance: -diff, Reserved: diff } });
+        await BalanceModel.findOneAndUpdate(
+          { UserID: req.user._id, TypeOf: 'Product Owner' },
+          { $inc: { Balance: -diff, Reserved: diff } }
+        );
       } else if (diff < 0) {
-        // release reserved funds
-        await BalanceModel.findOneAndUpdate({ UserID: req.user._id, TypeOf: 'Product Owner' }, { $inc: { Balance: -diff, Reserved: diff } });
-        // Note: diff is negative so -diff adds to Balance, Reserved decreases
+        // release reserved funds (diff negative)
+        // -diff will be positive and added to Balance, Reserved decreases by |diff|
+        await BalanceModel.findOneAndUpdate(
+          { UserID: req.user._id, TypeOf: 'Product Owner' },
+          { $inc: { Balance: -diff, Reserved: diff } }
+        );
       }
 
       product.expectedCost = newExpectedCost;
       product.affiliateCommission = newAffiliateCommission;
       product.maxClicks = newMaxClicks;
+    } else {
+      // Even if expectedCost didn't change, we still apply maxClicks/affiliateCommission updates if provided
+      if (hasMaxClicksUpdate && newMaxClicks !== product.maxClicks) {
+        product.maxClicks = newMaxClicks;
+      }
+      if (hasAffiliateCommissionUpdate && newAffiliateCommission !== product.affiliateCommission) {
+        product.affiliateCommission = newAffiliateCommission;
+      }
     }
 
+    // If maxClicks was updated in this request, update product.isActive accordingly:
+    // product is active iff maxClicks > currentClicks
+    if (hasMaxClicksUpdate) {
+      const currentClicks = product.currentClicks || 0;
+      product.isActive = newMaxClicks > currentClicks;
+    }
+
+    // Other simple field updates
     if (typeof name !== 'undefined') product.name = name;
     if (typeof description !== 'undefined') product.description = description;
     if (typeof currency !== 'undefined') product.currency = currency;
     if (typeof affiliateLink !== 'undefined') product.affiliateLink = affiliateLink;
-    if (typeof isActive !== 'undefined') product.isActive = Boolean(isActive);
 
     await product.save();
 
-    return res.json({
+    // Update affiliate links isActive based on each link's clickCount relative to product.maxClicks
+    let affiliateLinksUpdateResult = null;
+    try {
+      // enable those with room under maxClicks
+      const enableRes = await AffiliateLinkModel.updateMany(
+        { product: product._id, clickCount: { $lt: product.maxClicks } },
+        { $set: { isActive: true } }
+      );
+
+      // disable those that have reached/exceeded maxClicks
+      const disableRes = await AffiliateLinkModel.updateMany(
+        { product: product._id, clickCount: { $gte: product.maxClicks } },
+        { $set: { isActive: false } }
+      );
+
+      affiliateLinksUpdateResult = {
+        enabledMatched: enableRes.matchedCount ?? enableRes.n ?? 0,
+        enabledModified: enableRes.modifiedCount ?? enableRes.nModified ?? 0,
+        disabledMatched: disableRes.matchedCount ?? disableRes.n ?? 0,
+        disabledModified: disableRes.modifiedCount ?? disableRes.nModified ?? 0,
+      };
+    } catch (affErr) {
+      console.error('Failed to update affiliate link isActive flags for product', product._id, affErr);
+      // keep affiliateLinksUpdateResult null to indicate warning
+    }
+
+    const responsePayload = {
       Access: true,
       Message: 'Product updated',
       product,
-    });
+      affiliateLinksUpdated: affiliateLinksUpdateResult,
+    };
+
+    if (!affiliateLinksUpdateResult) {
+      // include a non-fatal warning if affiliate update failed
+      responsePayload.Warning = 'Product updated but failed to update affiliate links isActive flags. Check server logs.';
+    }
+
+    return res.json(responsePayload);
   } catch (error) {
+    console.error('Product update error', error);
     return res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
   }
 });

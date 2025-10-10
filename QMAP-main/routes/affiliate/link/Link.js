@@ -130,9 +130,8 @@ router.get("/api/redirect/:linkId", async (req, res) => {
     }
 
     // Determine destination early (prefer the product's original affiliate URL)
-    const destination = product.affiliateLink && product.affiliateLink.trim().length > 0
-      ? product.affiliateLink
-      : `${req.protocol}://${req.get('host')}/product-owner-dashboard/${product.uniqueProductId}`;
+    const destination = product.affiliateLink;
+    const newDestination = destination.startsWith('https://') ? destination : `https://${destination}`;
 
     // Prevent duplicate clicks from the same IP + userAgent (count only once ever)
     const alreadyClicked = await ClickTrackingModel.findOne({
@@ -144,7 +143,7 @@ router.get("/api/redirect/:linkId", async (req, res) => {
     // If the same visitor already clicked this affiliate link before, do not count again — redirect immediately
     if (alreadyClicked) {
       console.log(`[AffiliateLink] Already clicked: linkId=${linkId}, ip=${req.ip}, userAgent=${req.get('User-Agent')}`);
-      return res.redirect(destination);
+      return res.redirect(newDestination);
     }
 
     // Track the click
@@ -227,8 +226,10 @@ router.get("/api/redirect/:linkId", async (req, res) => {
       }
     }
 
+    console.log({ destination, newDestination });
+
     // Redirect the user to the actual product affiliate URL (or fallback page)
-    return res.redirect(destination);
+    return res.redirect(newDestination);
   } catch (error) {
     res.status(400).json({ Access: true, Error: Errordisplay(error).msg });
   }
